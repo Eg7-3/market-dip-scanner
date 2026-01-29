@@ -1,0 +1,9 @@
+[
+  {
+    "ticker": "AAPL",
+    "entry_price": 175.0,
+    "entry_date": "2025-12-15",
+    "shares": 10,
+    "notes": "Example position for sell alerts"
+  }
+]
