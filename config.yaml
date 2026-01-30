@@ -1,41 +1,71 @@
-dip_threshold: -0.5          # tweak for testing; set back to -5.0 for production
+###############################################################
+# QQQ / S&P Dip Scanner - Production Defaults
+# When tiered_dips_enabled=true, legacy dip_threshold / rsi_threshold /
+# relative_volume_min are ignored at runtime (logged warning).
+###############################################################
+
+# Legacy (ignored if tiered_dips_enabled=true)
+dip_threshold: -5.0
+rsi_threshold: 35
+relative_volume_min: 1.5
+
+# Tiered dips (primary path)
 tiered_dips_enabled: true
 tier1_dip: -3.5
 tier2_dip: -5.0
 tier1_min_confirmations: 3
 tier2_min_confirmations: 2
 tier1_rsi_max: 35
-tier2_rsi_max: 40    # allow slightly higher RSI in true panic
+tier2_rsi_max: 40
 tier1_relvol_min: 1.5
 tier2_relvol_min: 1.2
-max_workers: 6              # parallel quote fetchers; keep modest to avoid 429s
-http_timeout: 5.0           # seconds for holdings HTTP calls
-market_cap_min: 10000000000  # testing; set back to 30000000000 for production quality
-min_dollar_volume: 300000000 # testing; set back to 1000000000 for production
-avg_volume_min: 1000000      # testing; set back to 2000000 for production
-realert_delta: -1.0          # testing; set back to -2.0 for production
-rsi_threshold: 40            # testing; set back to 35 for production
-relative_volume_min: 0.8     # testing; set back to 1.5 for production
+
+# Quality & liquidity
+market_cap_min: 30000000000
+min_dollar_volume: 1000000000
+avg_volume_min: 2000000
+realert_delta: -2.0
+hard_reject_below_200dma_pct: -20.0
+
+# 200-DMA zones
 dma200_tolerance_pct: 2.0
 dma200_green_pct: 2.0
 dma200_red_pct: -2.0
 allow_red_reclaim: false
 require_rising_dma200_in_yellow: true
+
+# Intraday options
 use_intraday_low: true
-telegram_bot_token: "ENV:TELEGRAM_BOT_TOKEN"
-telegram_chat_id: "ENV:TELEGRAM_CHAT_ID"
+candle_interval: "5m"
+after_hours_enabled: true
+market_hours_only: false
+cooldown_minutes_after_open: 5
+dedupe_cooldown_minutes: 10
+holdings_cache_hours: 24
+require_fast_selloff: true
+
+# Runtime & infra
+max_workers: 6
+http_timeout: 5.0
 run_interval_seconds: 300
 market_timezone: "America/Chicago"
-market_hours_only: false
-after_hours_enabled: false
+testing_mode: false
+custom_watchlist: []   # e.g., ["SPY", "DIA"]
+
+# Alerts
+telegram_bot_token: "ENV:TELEGRAM_BOT_TOKEN"
+telegram_chat_id: "ENV:TELEGRAM_CHAT_ID"
+use_discord: true
+discord_webhook_url: "ENV:DISCORD_WEBHOOK_URL"
+discord_username: "Captain Stock Scanner"
+
+# Sell alerts (optional)
 enable_sell_alerts: false
 take_profit_1: 0.05
 take_profit_2: 0.07
 take_profit_3: 0.10
-cooldown_minutes_after_open: 5
-candle_interval: "5m"
-holdings_cache_hours: 24
-require_fast_selloff: true
+
+# News filters
 news_keywords:
   - bankruptcy
   - fraud

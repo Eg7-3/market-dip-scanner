@@ -12,6 +12,16 @@ Python 3.11 tool that watches Nasdaq‑100 names for sharp intraday drops and se
 - Intraday candles (5m default) compute worst dip, VWAP, relative volume; dedupe with re‑alert only on deeper lows or tier upgrade.
 - Telegram alerts include ticker, name, sector, mcap, current % change, worst intraday dip, RSI, relative volume, 200‑DMA distance, zone grade (A/B/C), tier label, reason summary, and news hint (with emojis).
 
+## Pipeline (single ordered path)
+1) Universe = live QQQ holdings ∪ custom_watchlist.
+2) Fetch metrics (price, intraday low, VWAP, RSI, rel‑vol, MA200 + slope, dollar vol, mcap).
+3) Choose dip metric: market open → intraday low; closed → intraday low (or min with extended if after‑hours enabled).
+4) Tiering: Tier2 if dip ≤ tier2_dip else Tier1 if dip ≤ tier1_dip else stop.
+5) 200‑DMA zones: GREEN/YELLOW/RED; hard reject only if below `hard_reject_below_200dma_pct`; YELLOW optionally requires rising MA200.
+6) Confirmation score: RSI / RelVol / $Vol / MktCap / VWAP touch / QQQ backdrop / fast‑selloff. Require tier‑ and zone‑aware minima.
+7) Dedupe: per‑ticker state, cooldown, re‑alert on deeper dip or Tier1→Tier2 upgrade; testing_mode bypasses dedupe.
+8) Render once for Telegram + Discord with pass/fail reasons and risk hints.
+
 ## Quick Start
 1) **Install deps**
    ```bash
@@ -38,6 +48,14 @@ Python 3.11 tool that watches Nasdaq‑100 names for sharp intraday drops and se
 3. Get chat id (easy way): visit `https://api.telegram.org/bot<token>/getUpdates` after sending a message; copy `chat.id`. Save both as env vars.
 
 ### Config reference (`config.yaml`)
+
+### Additional commands
+- Live loop: `python3 -m src.main`
+- Single run: `python3 -m src.main --once`
+- Test alert: `python3 -m src.main --test-alert`
+- Backtest a date: `python3 -m src.main --once --backtest-date YYYY-MM-DD`
+- Simulate (demo): `python3 -m src.main --once --simulate TICKER DIP RSI RELVOL DIST200`
+- Testing mode (no dedupe): set `testing_mode: true` in config.
 - Dip logic:
   - `tiered_dips_enabled`: switch between legacy single threshold and tiered system.
   - `tier1_dip`, `tier2_dip`: EARLY FEAR and PANIC intraday low triggers.
@@ -51,6 +69,10 @@ Python 3.11 tool that watches Nasdaq‑100 names for sharp intraday drops and se
   - `dma200_red_pct`: ≤ this below 200‑DMA → RED (reject unless reclaim allowed).
   - `allow_red_reclaim`: enable reclaim logic for deep dips.
   - `require_rising_dma200_in_yellow`: if true, YELLOW only passes when the 200‑DMA slope is rising.
+  - `hard_reject_below_200dma_pct`: absolute floor; below this distance alerts are blocked.
+- Dedupe / testing:
+  - `dedupe_cooldown_minutes`: minimum minutes between alerts for same ticker (unless deeper dip or tier upgrade).
+  - `testing_mode`: bypasses dedupe for demos/backtests.
 - `market_timezone`: e.g., `America/Chicago`; `market_hours_only` gates scans.
 - `cooldown_minutes_after_open`: skip first few minutes after open.
 - `run_interval_seconds`: loop sleep.

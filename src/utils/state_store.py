@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Tuple, Any
 
@@ -41,11 +41,30 @@ class StateStore:
             return {"low": float(entry), "tier": None}
         return entry
 
-    def should_alert(self, ticker: str, low_change_pct: float, realert_delta: float, tier: int | None = None) -> bool:
+    def should_alert(
+        self,
+        ticker: str,
+        low_change_pct: float,
+        realert_delta: float,
+        tier: int | None = None,
+        price: float | None = None,
+        cooldown_minutes: int = 0,
+        testing_mode: bool = False,
+    ) -> bool:
         today = self._today_key()
         ticker = ticker.upper()
         if today not in self.data:
             self.data[today] = {}
+
+        if testing_mode:
+            self.data[today][ticker] = {
+                "low": low_change_pct,
+                "tier": tier,
+                "price": price,
+                "ts": datetime.now().isoformat(),
+            }
+            self._save()
+            return True
 
         last_entry = self.data[today].get(ticker)
         # Backward compatibility: if float stored, wrap into dict
@@ -53,24 +72,54 @@ class StateStore:
             last_entry = {"low": float(last_entry), "tier": None}
 
         if last_entry is None:
-            self.data[today][ticker] = {"low": low_change_pct, "tier": tier}
+            self.data[today][ticker] = {"low": low_change_pct, "tier": tier, "price": price, "ts": datetime.now().isoformat()}
             self._save()
             return True
 
         last_low = last_entry.get("low")
         last_tier = last_entry.get("tier")
+        last_ts = last_entry.get("ts")
+        in_cooldown = False
+        if last_ts:
+            try:
+                last_dt = datetime.fromisoformat(last_ts)
+                in_cooldown = datetime.now() < last_dt + timedelta(minutes=cooldown_minutes)
+            except Exception:
+                in_cooldown = False
 
         # Tier upgrade overrides dedupe
         if tier is not None and last_tier is not None and tier > last_tier:
-            self.data[today][ticker] = {"low": low_change_pct, "tier": tier}
+            self.data[today][ticker] = {
+                "low": low_change_pct,
+                "tier": tier,
+                "price": price,
+                "ts": datetime.now().isoformat(),
+            }
             self._save()
             return True
 
         if low_change_pct <= last_low + realert_delta:
-            self.data[today][ticker] = {"low": low_change_pct, "tier": tier or last_tier}
+            self.data[today][ticker] = {
+                "low": low_change_pct,
+                "tier": tier or last_tier,
+                "price": price,
+                "ts": datetime.now().isoformat(),
+            }
             self._save()
             return True
-        return False
+
+        # otherwise respect cooldown
+        if in_cooldown:
+            return False
+
+        self.data[today][ticker] = {
+            "low": low_change_pct,
+            "tier": tier,
+            "price": price,
+            "ts": datetime.now().isoformat(),
+        }
+        self._save()
+        return True
 
     def reset_if_new_day(self) -> None:
         today = self._today_key()

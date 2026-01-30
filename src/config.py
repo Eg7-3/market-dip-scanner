@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict
@@ -35,6 +36,8 @@ class Config:
     min_dollar_volume: float
     rsi_threshold: float
     relative_volume_min: float
+    # hard rejection threshold when far below 200-DMA
+    hard_reject_below_200dma_pct: float
     tiered_dips_enabled: bool
     tier1_dip: float
     tier2_dip: float
@@ -58,6 +61,9 @@ class Config:
     news_risk_keywords: list[str]
     news_trusted_publishers: list[str]
     news_blocked_publishers: list[str]
+    use_discord: bool
+    discord_webhook_url: str | None
+    discord_username: str | None
     enable_sell_alerts: bool
     take_profit_1: float
     take_profit_2: float
@@ -69,6 +75,10 @@ class Config:
     holdings_cache_hours: int
     after_hours_enabled: bool
     require_fast_selloff: bool
+    testing_mode: bool
+    custom_watchlist: list[str]
+    # optional override for dedupe cooldown between alerts
+    dedupe_cooldown_minutes: int
 
     @classmethod
     def from_file(cls, path: str | Path) -> "Config":
@@ -80,6 +90,7 @@ class Config:
             min_dollar_volume=float(data.get("min_dollar_volume", 1_000_000_000)),
             rsi_threshold=float(data.get("rsi_threshold", 35)),
             relative_volume_min=float(data.get("relative_volume_min", 1.5)),
+            hard_reject_below_200dma_pct=float(data.get("hard_reject_below_200dma_pct", -20.0)),
             avg_volume_min=float(data.get("avg_volume_min", 2_000_000)),
             realert_delta=float(data.get("realert_delta", -2.0)),
             tiered_dips_enabled=bool(data.get("tiered_dips_enabled", False)),
@@ -107,6 +118,9 @@ class Config:
             news_risk_keywords=list(data.get("news_risk_keywords", ["guidance cut", "earnings miss", "fraud", "lawsuit", "fda", "recall", "probe", "downgrade", "sec", "bankruptcy", "restatement"])),
             news_trusted_publishers=list(data.get("news_trusted_publishers", ["reuters", "bloomberg", "wall street journal", "wsj", "ap", "associated press", "cnbc"])),
             news_blocked_publishers=list(data.get("news_blocked_publishers", ["seeking alpha transcript", "motley fool transcript"])),
+            use_discord=bool(data.get("use_discord", False)),
+            discord_webhook_url=data.get("discord_webhook_url"),
+            discord_username=data.get("discord_username"),
             enable_sell_alerts=bool(data.get("enable_sell_alerts", False)),
             take_profit_1=float(data.get("take_profit_1", 0.05)),
             take_profit_2=float(data.get("take_profit_2", 0.07)),
@@ -118,4 +132,32 @@ class Config:
             holdings_cache_hours=int(data.get("holdings_cache_hours", 24)),
             after_hours_enabled=bool(data.get("after_hours_enabled", False)),
             require_fast_selloff=bool(data.get("require_fast_selloff", True)),
+            testing_mode=bool(data.get("testing_mode", False)),
+            custom_watchlist=list(data.get("custom_watchlist", [])),
+            dedupe_cooldown_minutes=int(data.get("dedupe_cooldown_minutes", 10)),
         )
+
+    def validate(self) -> None:
+        """
+        Run config-time sanity checks and surface the effective knobs that will be used.
+        Legacy dip/rsi/relvol knobs are ignored when tiered_dips_enabled=True; we warn loudly.
+        """
+        if self.tiered_dips_enabled:
+            legacy_used = []
+            if self.dip_threshold > -100:
+                legacy_used.append("dip_threshold")
+            if self.rsi_threshold < 100:
+                legacy_used.append("rsi_threshold")
+            if self.relative_volume_min > 0:
+                legacy_used.append("relative_volume_min")
+            if legacy_used:
+                logging.warning(
+                    "Tiered dips enabled; ignoring legacy gates: %s", ", ".join(legacy_used)
+                )
+            # Make it explicit in-memory
+            self.dip_threshold = -9999
+            self.rsi_threshold = 10_000
+            self.relative_volume_min = -1
+            logging.warning(
+                "Effective config: tiered dips active. Legacy dip/rsi/relvol have been neutralized in memory."
+            )

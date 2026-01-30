@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from .alerts.telegram import TelegramAlerter
+from .alerts.discord import DiscordAlerter
 from .config import Config
 from .providers.yahoo_provider import YahooProvider
 from .scanners.qqq_dip_scanner import QQQDipScanner
@@ -21,32 +22,9 @@ def build_breadth_line(provider: YahooProvider) -> str | None:
         return None
 
 
-def format_dip_message(ctx, breadth_line: str | None) -> str:
-    quote = ctx.quote
-    def fmt(val, pattern):
-        return pattern.format(val) if val is not None else "n/a"
-
-    header = f"{ctx.ticker} — {quote.name or ''}".strip()
-    sector = f"{quote.sector}" if quote.sector else ""
-
-    price_line = f"💰 Price ${quote.price:.2f} (cur {quote.change_pct:.2f}%) • Low ${fmt(quote.intraday_low, '{:.2f}')} ({fmt(quote.intraday_low_change, '{:.2f}')}%)"
-    strength_line = f"📊 RSI {fmt(quote.rsi, '{:.1f}') } | RelVol {fmt(quote.relative_volume, '{:.2f}')} | VWAP {fmt(quote.vwap, '{:.2f}')}"
-    trend_line = f"📈 200-DMA {fmt(quote.ma200, '{:.2f}')} | Dist {fmt(quote.dma200_dist_pct, '{:.2f}')}%"
-    size_line = f"🏦 MktCap ${quote.market_cap/1e9:.1f}B | $Vol ${quote.dollar_volume/1e9:.2f}B | Vol {quote.volume:,}/{quote.avg_volume:,}"
-    context_line = f"🌐 {breadth_line}" if breadth_line else ""
-
-    parts = [
-        f"🚀 *{header}* {f'({sector})' if sector else ''}",
-        ctx.reason,
-        price_line,
-        strength_line,
-        trend_line,
-        size_line,
-    ]
-    if context_line:
-        parts.append(context_line)
-    parts.append(ctx.news_hint)
-    return "\n".join(p for p in parts if p)
+def format_dip_message(ctx) -> str:
+    # reason is fully pre-rendered in scanner
+    return ctx.reason
 
 
 def format_sell_message(alert) -> str:
@@ -62,44 +40,15 @@ def format_sell_message(alert) -> str:
     )
 
 
-def run_once(cfg: Config, alerter: TelegramAlerter, provider: YahooProvider, data_dir: Path) -> None:
+def run_once(cfg: Config, alerter: TelegramAlerter, provider: YahooProvider, data_dir: Path, backtest_date: str | None = None, simulate: dict | None = None) -> None:
     breadth_line = build_breadth_line(provider)
-    scanner = QQQDipScanner(
-        provider=provider,
-        state_path=data_dir / "state.json",
-        max_workers=cfg.max_workers,
-        market_cap_min=cfg.market_cap_min,
-        avg_volume_min=cfg.avg_volume_min,
-        min_dollar_volume=cfg.min_dollar_volume,
-        dip_threshold=cfg.dip_threshold,
-        realert_delta=cfg.realert_delta,
-        news_keywords=cfg.news_keywords,
-        use_intraday_low=cfg.use_intraday_low,
-        candle_interval=cfg.candle_interval,
-        holdings_cache_hours=cfg.holdings_cache_hours,
-        after_hours_enabled=cfg.after_hours_enabled,
-        rsi_threshold=cfg.rsi_threshold,
-        relative_volume_min=cfg.relative_volume_min,
-        tiered_dips_enabled=cfg.tiered_dips_enabled,
-        tier1_dip=cfg.tier1_dip,
-        tier2_dip=cfg.tier2_dip,
-        tier1_min_confirmations=cfg.tier1_min_confirmations,
-        tier2_min_confirmations=cfg.tier2_min_confirmations,
-        tier1_rsi_max=cfg.tier1_rsi_max,
-        tier2_rsi_max=cfg.tier2_rsi_max,
-        tier1_relvol_min=cfg.tier1_relvol_min,
-        tier2_relvol_min=cfg.tier2_relvol_min,
-        dma200_tolerance_pct=cfg.dma200_tolerance_pct,
-        dma200_green_pct=cfg.dma200_green_pct,
-        dma200_red_pct=cfg.dma200_red_pct,
-        allow_red_reclaim=cfg.allow_red_reclaim,
-        require_rising_dma200_in_yellow=cfg.require_rising_dma200_in_yellow,
-        require_fast_selloff=cfg.require_fast_selloff,
-    )
-    alerts = scanner.scan()
+    scanner = QQQDipScanner(cfg=cfg, provider=provider, state_path=data_dir / "state.json")
+    alerts = scanner.scan(breadth_line=breadth_line, backtest_date=backtest_date, simulate=simulate)
     for ctx in alerts:
-        msg = format_dip_message(ctx, breadth_line)
+        msg = format_dip_message(ctx)
         alerter.send(msg)
+        if discord_alerter := getattr(run_once, "discord_alerter", None):
+            discord_alerter.send(msg)
         logging.info("Alert sent for %s", ctx.ticker)
 
     if cfg.enable_sell_alerts:
@@ -114,6 +63,8 @@ def main() -> None:
     parser.add_argument("--config", default="config.yaml", help="Path to config.yaml")
     parser.add_argument("--once", action="store_true", help="Run only once then exit")
     parser.add_argument("--test-alert", action="store_true", help="Send a test alert to Telegram and exit")
+    parser.add_argument("--backtest-date", help="Run a backtest for a specific YYYY-MM-DD date")
+    parser.add_argument("--simulate", nargs=5, metavar=("TICKER", "DIP", "RSI", "RELVOL", "DIST200"), help="Simulate a ticker with given metrics (dip pct, rsi, relvol, dist to 200dma pct)")
     parser.add_argument("--log-level", default="INFO", help="Logging level")
     args = parser.parse_args()
 
@@ -123,14 +74,30 @@ def main() -> None:
     )
 
     cfg = Config.from_file(args.config)
+    cfg.validate()
     provider = YahooProvider(timeout=cfg.http_timeout)
     data_dir = Path("data")
     data_dir.mkdir(exist_ok=True)
     alerter = TelegramAlerter(cfg.telegram_bot_token, cfg.telegram_chat_id)
+    if cfg.use_discord:
+        run_once.discord_alerter = DiscordAlerter(cfg.discord_webhook_url, cfg.discord_username)
+    else:
+        run_once.discord_alerter = None
 
     if args.test_alert:
         alerter.send("Test alert: QQQ Quality Dip Scanner is connected.")
         return
+
+    simulate = None
+    if args.simulate:
+        sim_ticker, sim_dip, sim_rsi, sim_relvol, sim_dist = args.simulate
+        simulate = {
+            "ticker": sim_ticker.upper(),
+            "dip": float(sim_dip),
+            "rsi": float(sim_rsi),
+            "relvol": float(sim_relvol),
+            "dist200": float(sim_dist),
+        }
 
     if is_weekend(cfg.market_timezone):
         logging.info("Weekend detected; scanner idle.")
@@ -139,11 +106,18 @@ def main() -> None:
 
     while True:
         tz_now = now_tz(cfg.market_timezone)
+        if args.backtest_date:
+            try:
+                run_once(cfg, alerter, provider, data_dir, backtest_date=args.backtest_date, simulate=simulate)
+            except Exception as exc:
+                logging.exception("Backtest run failed: %s", exc)
+            break
+
         if cfg.market_hours_only and not cfg.after_hours_enabled and not is_market_open(cfg.market_timezone, cfg.cooldown_minutes_after_open):
             logging.info("Outside market hours (%s); sleeping.", tz_now)
         else:
             try:
-                run_once(cfg, alerter, provider, data_dir)
+                run_once(cfg, alerter, provider, data_dir, simulate=simulate)
             except Exception as exc:
                 logging.exception("Run failed: %s", exc)
         if args.once:
