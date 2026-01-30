@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Dict, Tuple, Any
 
@@ -11,9 +12,10 @@ class StateStore:
     Persists alerts sent per day to avoid duplicates and remember last alert level.
     """
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, tz: str | None = None):
         self.path = path
         self.data: Dict[str, Dict[str, Any]] = {}
+        self.tz = ZoneInfo(tz) if tz else None
         self._load()
 
     def _load(self) -> None:
@@ -32,7 +34,8 @@ class StateStore:
             json.dump(self.data, f, indent=2)
 
     def _today_key(self) -> str:
-        return datetime.now().strftime("%Y-%m-%d")
+        now = datetime.now(self.tz) if self.tz else datetime.now()
+        return now.strftime("%Y-%m-%d")
 
     def get_today_entry(self, ticker: str) -> dict | None:
         today = self._today_key()

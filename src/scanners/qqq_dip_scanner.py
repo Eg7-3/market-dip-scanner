@@ -35,7 +35,7 @@ class QQQDipScanner:
     def __init__(self, cfg: Config, provider: DataProvider, state_path: Path):
         self.cfg = cfg
         self.provider = provider
-        self.state = StateStore(state_path)
+        self.state = StateStore(state_path, tz=cfg.market_timezone)
 
     # --- Helpers ---------------------------------------------------------
     def _news_flag(self, ticker: str) -> tuple[bool, str]:

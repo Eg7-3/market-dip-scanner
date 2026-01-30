@@ -12,6 +12,8 @@ from .providers.yahoo_provider import YahooProvider
 from .scanners.qqq_dip_scanner import QQQDipScanner
 from .scanners.sell_alerts import SellAlertEngine
 from .utils.time_utils import is_market_open, is_weekend, now_tz
+from zoneinfo import ZoneInfo
+import json
 
 
 def build_breadth_line(provider: YahooProvider) -> str | None:
@@ -38,6 +40,52 @@ def format_sell_message(alert) -> str:
             alert.notes or "",
         ]
     )
+
+class DailyNotifier:
+    """
+    Sends one-off daily notices (premarket + open) based on market timezone.
+    """
+    def __init__(self, path: Path, tz: str, alerter: TelegramAlerter, discord=None):
+        self.path = path
+        self.tz = ZoneInfo(tz)
+        self.alerter = alerter
+        self.discord = discord
+        self.state = {"date": None, "premarket": False, "open": False}
+        if path.exists():
+            try:
+                self.state = json.loads(path.read_text())
+            except Exception:
+                pass
+
+    def _save(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(self.state))
+
+    def maybe_send(self) -> None:
+        now = now_tz(self.tz.key)
+        today = now.strftime("%Y-%m-%d")
+        if self.state.get("date") != today:
+            self.state = {"date": today, "premarket": False, "open": False}
+
+        # Premarket ping ~30m before open (08:00 market tz)
+        if not self.state.get("premarket") and now.hour == 8 and 0 <= now.minute < 15:
+            msg = "⏰ 30 min til the casino opens — premarket watch on."
+            self.alerter.send(msg)
+            if self.discord:
+                self.discord.send(msg)
+            self.state["premarket"] = True
+            self._save()
+            return
+
+        # Opening bell ping (08:30 market tz)
+        if not self.state.get("open") and now.hour == 8 and 30 <= now.minute < 45:
+            msg = "🎰 Casino is open — live dip scanner running."
+            self.alerter.send(msg)
+            if self.discord:
+                self.discord.send(msg)
+            self.state["open"] = True
+            self._save()
+            return
 
 
 def run_once(cfg: Config, alerter: TelegramAlerter, provider: YahooProvider, data_dir: Path, backtest_date: str | None = None, simulate: dict | None = None) -> None:
@@ -104,8 +152,11 @@ def main() -> None:
         if args.once:
             return
 
+    notifier = DailyNotifier(data_dir / "daily_notices.json", cfg.market_timezone, alerter, run_once.discord_alerter)
+
     while True:
         tz_now = now_tz(cfg.market_timezone)
+        notifier.maybe_send()
         if args.backtest_date:
             try:
                 run_once(cfg, alerter, provider, data_dir, backtest_date=args.backtest_date, simulate=simulate)
