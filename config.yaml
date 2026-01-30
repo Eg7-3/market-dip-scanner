@@ -37,8 +37,8 @@ require_rising_dma200_in_yellow: true
 # Intraday options
 use_intraday_low: true
 candle_interval: "5m"
-after_hours_enabled: true
-market_hours_only: false
+after_hours_enabled: false
+market_hours_only: true
 cooldown_minutes_after_open: 5
 dedupe_cooldown_minutes: 10
 holdings_cache_hours: 24
